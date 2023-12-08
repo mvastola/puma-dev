@@ -3,10 +3,12 @@ module github.com/puma/puma-dev
 go 1.13
 
 require (
+	github.com/DavidHuie/quartz v1.5.0
 	github.com/avast/retry-go v2.5.0+incompatible
 	github.com/bmizerany/pat v0.0.0-20210406213842-e4b6760bdd6f
 	github.com/fsnotify/fsevents v0.1.1
 	github.com/fsnotify/fsnotify v1.6.0
+	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0
 	github.com/miekg/dns v1.1.50

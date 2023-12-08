@@ -188,6 +188,7 @@ func main() {
 	}
 
 	http.Setup()
+	//dev.SetupQuartz(&http)
 
 	var (
 		socketName    string
