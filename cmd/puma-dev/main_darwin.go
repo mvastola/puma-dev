@@ -188,8 +188,10 @@ func main() {
 	}
 
 	http.Setup()
-	//dev.SetupQuartz(&http)
-
+	var rpc *dev.RpcService = http.ServeRPC()
+	if rpc != nil {
+		fmt.Printf("RPC server started")
+	}
 	var (
 		socketName    string
 		tlsSocketName string
