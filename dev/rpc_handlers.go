@@ -83,7 +83,9 @@ func (svc *RpcService) rpcUpdateAppPool(r *http.Request) (int, any, error) {
 		if timeout < time.Minute {
 			return http.StatusUnprocessableEntity, nil, errors.New("idleTimeout must be at least 1 minute")
 		}
+		pool.lock.Lock()
 		pool.IdleTime = timeout
+		pool.lock.Unlock()
 	}
 	return http.StatusOK, nil, nil
 }

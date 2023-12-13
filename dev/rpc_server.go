@@ -2,6 +2,7 @@ package dev
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/puma/puma-dev/homedir"
 	"log"
@@ -11,23 +12,31 @@ import (
 )
 
 const RpcSocketPath = "~/.puma-dev.mgmt.sock"
+const RpcTcpPort = 8080
 
 var StatusLabels = [...]string{"booting", "running", "dead"}
 
 var rpcService RpcService
 
+type RpcListenAddr struct {
+	network string
+	addr    string
+}
+
 type RpcService struct {
+	TcpPort    int16
 	SocketPath string
 	Pool       *AppPool
 	PumaDev    *HTTPServer
+	mux        *mux.Router
 
-	mux         *mux.Router
-	listener    *net.Listener
+	listeners   []net.Listener
 	ctrlServer  *http.Server
 	initialized bool
 }
 
 func (svc *RpcService) init(h *HTTPServer) {
+	svc.initialized = false
 	svc.PumaDev = h
 	svc.Pool = h.Pool
 	svc.mux = mux.NewRouter()
@@ -38,16 +47,32 @@ func (svc *RpcService) init(h *HTTPServer) {
 	svc.initialized = true
 }
 
-func (svc *RpcService) start() {
-	_ = os.Remove(svc.SocketPath)
-	listener, err := net.Listen("unix", svc.SocketPath)
-	if err != nil {
-		log.Fatalf("Error opening socket %s for RPC service: %s", svc.SocketPath, err)
+func (svc *RpcService) listen() {
+	addListener := func(network string, addr string) {
+		listener, err := net.Listen(network, addr)
+		if err != nil {
+			log.Fatalf("Error opening socket %s for RPC service: %s", svc.SocketPath, err)
+		}
+		svc.listeners = append(svc.listeners, listener)
 	}
-	svc.listener = &listener
-	err = svc.ctrlServer.Serve(listener)
+	addListener("unix", homedir.MustExpand(svc.SocketPath))
+	addListener("tcp4", fmt.Sprintf("%s:%d", "localhost", svc.TcpPort))
+}
+
+func (svc *RpcService) serveListener(listener *net.Listener) {
+	err := svc.ctrlServer.Serve(*listener)
 	if err != nil {
 		log.Fatalf("Error starting RPC service: %s", err)
+	}
+}
+
+func (svc *RpcService) start() {
+	_ = os.Remove(svc.SocketPath)
+	svc.listen()
+
+	var listener *net.Listener = nil
+	for listener = range svc.listeners {
+		go svc.serveListener(listener)
 	}
 }
 
