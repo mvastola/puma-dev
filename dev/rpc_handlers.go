@@ -1,10 +1,14 @@
 package dev
 
 import (
+	_ "fmt"
+	"github.com/gorilla/websocket"
 	"github.com/vektra/errors"
+	"log"
 	"net/http"
 	"regexp"
 	_ "strconv"
+	"time"
 )
 
 type JsonObj map[string]any
@@ -15,20 +19,28 @@ var NotImplementedErr = errors.New("Not Yet Implemented")
 var NotFoundErr = errors.New("Path does not exist")
 var removeSuffixRe = regexp.MustCompile(`-[a-f0-9]{4,}$`)
 
+var upgrader = websocket.Upgrader{} // use default options
+
 func (svc *RpcService) ConfigureRoutes() {
 	// see: https://github.com/gorilla/pat?tab=readme-ov-file#example
 	// JSON struct tagging: https://stackoverflow.com/a/42549826
+	//mux.HandleFunc("/specific", specificHandler)
+	//mux.PathPrefix("/").Handler(catchAllHandler)
+
 	mux := svc.mux
-	mux.Get("/", svc.wrapHandler(svc.rpcGetServer))
-	mux.Patch("/", svc.wrapHandler(svc.rpcEditServer))
-	mux.Del("/", svc.wrapHandler(svc.rpcStopPumaDev))
+	mux.HandleFunc("/", svc.wrapHandler(svc.rpcGetServer)).Methods("GET")
+	mux.HandleFunc("/", svc.wrapHandler(svc.rpcEditServer)).Methods("PATCH")
+	mux.HandleFunc("/", svc.wrapHandler(svc.rpcStopPumaDev)).Methods("DELETE")
 
-	mux.Get("/apps", svc.wrapHandler(svc.rpcAppsIndex))
-	mux.Del("/apps", svc.wrapHandler(svc.rpcPurgeAppPool))
+	mux.HandleFunc("/apps", svc.wrapHandler(svc.rpcAppsIndex)).Methods("GET")
+	mux.HandleFunc("/apps", svc.wrapHandler(svc.rpcUpdateAppPool)).Methods("PATCH")
+	mux.HandleFunc("/apps", svc.wrapHandler(svc.rpcPurgeAppPool)).Methods("DELETE")
 
-	mux.Get("/apps/:id", svc.wrapHandler(svc.rpcGetApp))
-	mux.Patch("/apps/:id", svc.wrapHandler(svc.rpcUpdateApp))
-	mux.Del("/apps/:id", svc.wrapHandler(svc.rpcKillApp))
+	mux.HandleFunc("/apps/{id}", svc.wrapHandler(svc.rpcGetApp)).Methods("GET")
+	mux.HandleFunc("/apps/{id}", svc.wrapHandler(svc.rpcUpdateApp)).Methods("PATCH")
+	mux.HandleFunc("/apps/{id}", svc.wrapHandler(svc.rpcKillApp)).Methods("DELETE")
+
+	mux.HandleFunc("/events", svc.rpcEventsConnectWS)
 }
 
 func (svc *RpcService) rpcGetServer(r *http.Request) (int, any, error) {
@@ -50,6 +62,30 @@ func (svc *RpcService) rpcStopPumaDev(r *http.Request) (int, any, error) {
 
 func (svc *RpcService) rpcAppsIndex(r *http.Request) (int, any, error) {
 	return http.StatusOK, svc.Pool.ToJson(), nil
+}
+
+type rpcUpdateAppPoolRequest struct {
+	IdleTimeout *string `json:"idleTimeout,omitIfEmpty"`
+}
+
+func (svc *RpcService) rpcUpdateAppPool(r *http.Request) (int, any, error) {
+	pool := svc.Pool
+	reqBody := rpcUpdateAppPoolRequest{}
+	err := rpcParseJsonRequestBody[rpcUpdateAppPoolRequest](r, &reqBody)
+	if err != nil {
+		return http.StatusUnprocessableEntity, nil, err
+	}
+	if reqBody.IdleTimeout != nil {
+		timeout, err := time.ParseDuration(*reqBody.IdleTimeout)
+		if err != nil {
+			return http.StatusUnprocessableEntity, nil, err
+		}
+		if timeout < time.Minute {
+			return http.StatusUnprocessableEntity, nil, errors.New("idleTimeout must be at least 1 minute")
+		}
+		pool.IdleTime = timeout
+	}
+	return http.StatusOK, nil, nil
 }
 
 func (svc *RpcService) rpcPurgeAppPool(r *http.Request) (int, any, error) {
@@ -81,6 +117,30 @@ func (svc *RpcService) rpcKillApp(r *http.Request) (int, any, error) {
 		return http.StatusNotFound, nil, NotFoundErr
 	}
 	return http.StatusNotImplemented, nil, NotImplementedErr
+}
+
+// This just echos for now, but want to turn it into an event feed
+func (svc *RpcService) rpcEventsConnectWS(w http.ResponseWriter, r *http.Request) {
+	c, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Print("upgrade:", err)
+		return
+	}
+	defer c.Close()
+	for {
+		// TODO: need to setup some sort of blocking queue, I guess
+		mt, message, err := c.ReadMessage()
+		if err != nil {
+			log.Println("read:", err)
+			break
+		}
+		log.Printf("recv: %s", message)
+		err = c.WriteMessage(mt, message)
+		if err != nil {
+			log.Println("write:", err)
+			break
+		}
+	}
 }
 
 //func (svc *RpcService) rpcDeleteServer(r *http.Request) (int, any, error) {

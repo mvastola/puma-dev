@@ -3,6 +3,7 @@ package dev
 import (
 	"encoding/json"
 	"github.com/carlmjohnson/truthy"
+	"github.com/gorilla/mux"
 	"io"
 	"log"
 	"net/http"
@@ -16,8 +17,9 @@ func (svc *RpcService) reqQueryParams(r *http.Request) url.Values {
 }
 
 func (svc *RpcService) findAppByRequest(r *http.Request) *App {
+	pathParams := mux.Vars(r)
 	params := svc.reqQueryParams(r)
-	id := svc.PumaDev.removeTLD(params.Get(":id"))
+	id := svc.PumaDev.removeTLD(pathParams[":id"])
 	tryCreateIfMissing := !truthy.ValueAny(params.Get("noCreate"))
 	return svc.findAppByKey(id, tryCreateIfMissing)
 }
@@ -63,27 +65,27 @@ func (svc *RpcService) findAppByKey(id string, tryCreateIfMissing bool) *App {
 	return nil
 }
 
-func (svc *RpcService) parseJsonReqBody(r *http.Request) (JsonObj, error) {
+// default: JsonObj
+func rpcParseJsonRequestBody[T interface{}](r *http.Request, target *T) error {
 	bodyReader, err := r.GetBody()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(body) == 0 {
-		return nil, nil
+		return nil
 	}
 
-	var result map[string]any
-	err = json.Unmarshal(body, &result)
+	err = json.Unmarshal(body, target)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return result, nil
+	return nil
 }
 
-func (svc *RpcService) HandleEvent(event string) {
+func (svc *RpcService) handleEvent(event string) {
 
 }

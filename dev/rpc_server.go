@@ -2,7 +2,7 @@ package dev
 
 import (
 	"encoding/json"
-	"github.com/bmizerany/pat"
+	"github.com/gorilla/mux"
 	"github.com/puma/puma-dev/homedir"
 	"log"
 	"net"
@@ -14,25 +14,28 @@ const RpcSocketPath = "~/.puma-dev.mgmt.sock"
 
 var StatusLabels = [...]string{"booting", "running", "dead"}
 
+var rpcService RpcService
+
 type RpcService struct {
 	SocketPath string
 	Pool       *AppPool
 	PumaDev    *HTTPServer
 
-	mux        *pat.PatternServeMux
-	listener   *net.Listener
-	ctrlServer *http.Server
+	mux         *mux.Router
+	listener    *net.Listener
+	ctrlServer  *http.Server
+	initialized bool
 }
 
 func (svc *RpcService) init(h *HTTPServer) {
 	svc.PumaDev = h
 	svc.Pool = h.Pool
-	svc.mux = pat.New()
-	EventListener.Register(svc)
+	svc.mux = mux.NewRouter()
 	svc.ctrlServer = &http.Server{
 		Handler: svc,
 	}
 	svc.SocketPath = homedir.MustExpand(RpcSocketPath)
+	svc.initialized = true
 }
 
 func (svc *RpcService) start() {
@@ -81,11 +84,10 @@ func (svc *RpcService) wrapHandler(handler SimpleHandler) http.HandlerFunc {
 }
 
 func (h *HTTPServer) StartRPC() *RpcService {
-	svc := &RpcService{}
-	svc.init(h)
-	svc.ConfigureRoutes()
-	go func() { svc.start() }()
-	return svc
+	rpcService.init(h)
+	rpcService.ConfigureRoutes()
+	go func() { rpcService.start() }()
+	return &rpcService
 }
 
 func (svc *RpcService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
