@@ -188,7 +188,7 @@ func main() {
 	}
 
 	http.Setup()
-	var rpc *dev.RpcService = http.ServeRPC()
+	var rpc *dev.RpcService = http.StartRPC()
 	if rpc != nil {
 		fmt.Printf("RPC server started")
 	}
