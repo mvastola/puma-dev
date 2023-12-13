@@ -83,3 +83,7 @@ func (svc *RpcService) parseJsonReqBody(r *http.Request) (JsonObj, error) {
 	}
 	return result, nil
 }
+
+func (svc *RpcService) HandleEvent(event string) {
+
+}

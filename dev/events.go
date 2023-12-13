@@ -31,7 +31,7 @@ func (e *Events) Add(name string, args ...interface{}) string {
 	str := buf.String()
 
 	e.events.Append(str)
-
+	EventListener.Trigger(str)
 	return str
 }
 

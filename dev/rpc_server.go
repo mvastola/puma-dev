@@ -28,6 +28,7 @@ func (svc *RpcService) init(h *HTTPServer) {
 	svc.PumaDev = h
 	svc.Pool = h.Pool
 	svc.mux = pat.New()
+	EventListener.Register(svc)
 	svc.ctrlServer = &http.Server{
 		Handler: svc,
 	}
