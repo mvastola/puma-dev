@@ -34,11 +34,12 @@ type RpcService struct {
 	Pool         *AppPool
 	PumaDev      *HTTPServer
 
-	mux         *mux.Router
-	wsChannel   *WebSocketChat.Hub
-	listeners   []net.Listener
-	ctrlServer  *http.Server
-	initialized bool
+	mux          *mux.Router
+	wsChannel    *WebSocketChat.Hub
+	wsAppChannel map[string]WebSocketChat.Hub
+	listeners    []net.Listener
+	ctrlServer   *http.Server
+	initialized  bool
 }
 
 func (svc *RpcService) init(h *HTTPServer) {
@@ -128,6 +129,6 @@ func (h *HTTPServer) StartRPC() *RpcService {
 }
 
 func (svc *RpcService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// TODO: verify permissions first
+	// TODO: verify permissions first(?)
 	svc.mux.ServeHTTP(w, r)
 }

@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
-	"strings"
 )
 
 func (svc *RpcService) reqQueryParams(r *http.Request) url.Values {
@@ -85,20 +84,4 @@ func rpcParseJsonRequestBody[T interface{}](r *http.Request, target *T) error {
 		return err
 	}
 	return nil
-}
-
-func (svc *RpcService) handleEvent(event string) {
-	svc.wsChannel.Broadcast([]byte(event))
-}
-
-func (svc *RpcService) handleLog(a *App, line string) {
-	line = strings.TrimSpace(line)
-	a.eventAdd("console_log", "message", line)
-
-	//result, err := json.MarshalIndent(event, "", "  ")
-	//if err == nil {
-	//	svc.handleEvent(string(result))
-	//} else {
-	//	log.Printf("Failed to JSON-encode log entry (%v): %s", err, line)
-	//}
 }

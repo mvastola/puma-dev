@@ -12,6 +12,11 @@ var (
 	space   = []byte{' '}
 )
 
+type Message struct {
+	payload []byte
+	tags    []string
+}
+
 // Hub maintains the set of active clients and broadcasts messages to the
 // clients.
 type Hub struct {
@@ -19,7 +24,7 @@ type Hub struct {
 	clients map[*Client]bool
 
 	// Broadcasts to the clients.
-	send chan []byte
+	send chan Message
 
 	// register requests from the clients.
 	register chan *Client
@@ -32,7 +37,7 @@ type Hub struct {
 
 func NewHub() *Hub {
 	return &Hub{
-		send:       make(chan []byte),
+		send:       make(chan Message),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		clients:    make(map[*Client]bool),
@@ -60,10 +65,13 @@ func (h *Hub) eachClient(fn func(c *Client)) {
 	}
 }
 
-func (h *Hub) broadcast(message []byte) {
+func (h *Hub) broadcast(message Message) {
 	h.eachClient(func(c *Client) {
+		if !c.IsSubscribed(message.tags...) {
+			return
+		}
 		select {
-		case c.send <- message:
+		case c.send <- message.payload:
 		default:
 			c.close()
 		}
@@ -97,7 +105,8 @@ func (h *Hub) Run() {
 	h.shutdown()
 }
 
-func (h *Hub) Broadcast(message []byte) {
-	message = bytes.TrimSpace(bytes.Replace(message, newline, space, -1))
+func (h *Hub) Broadcast(data []byte, tags ...string) {
+	data = bytes.TrimSpace(bytes.Replace(data, newline, space, -1))
+	message := Message{payload: data, tags: tags}
 	h.send <- message
 }

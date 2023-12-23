@@ -2,7 +2,6 @@ package dev
 
 import (
 	_ "fmt"
-	WebSocketChat "github.com/puma/puma-dev/dev/websockets"
 	"github.com/vektra/errors"
 	"log"
 	"net/http"
@@ -119,17 +118,6 @@ func (svc *RpcService) rpcKillApp(r *http.Request) (int, any, error) {
 		return http.StatusNotFound, nil, NotFoundErr
 	}
 	return http.StatusNotImplemented, nil, NotImplementedErr
-}
-
-func (svc *RpcService) rpcEventsConnectWS(w http.ResponseWriter, r *http.Request) {
-	cb := func(c *WebSocketChat.Client, msg []byte) error {
-		log.Printf("recv: %s", msg)
-		return c.Send([]byte("Incoming websocket messages unsupported"))
-	}
-	err := svc.wsChannel.Serve(w, r, cb)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
 }
 
 func (svc *RpcService) rpcDeleteServer(r *http.Request) (int, any, error) {

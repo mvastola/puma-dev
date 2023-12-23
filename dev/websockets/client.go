@@ -8,24 +8,26 @@ package WebSocketChat
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/cornelk/hashmap"
 	"github.com/gorilla/websocket"
 )
 
 const (
-	// Time allowed to write a message to the peer.
+	// Time allowed to write a payload to the peer.
 	writeWait = 10 * time.Second
 
-	// Time allowed to read the next pong message from the peer.
+	// Time allowed to read the next pong payload from the peer.
 	pongWait = 60 * time.Second
 
 	// Send pings to peer with this period. Must be less than pongWait.
 	pingPeriod = (pongWait * 9) / 10
 
-	// Maximum message size allowed from peer.
+	// Maximum payload size allowed from peer.
 	maxMessageSize = 2048
 )
 
@@ -36,6 +38,11 @@ var upgrader = websocket.Upgrader{
 
 type MessageCallback func(c *Client, msg []byte) error
 
+type HubServeOpts struct {
+	OnMessage     MessageCallback
+	Subscriptions []string
+}
+
 // Client is a middleman between the websocket connection and the Hub.
 type Client struct {
 	Hub *Hub
@@ -43,6 +50,8 @@ type Client struct {
 	// The websocket connection.
 	conn *websocket.Conn
 
+	// which apps' events the client is subscribed to
+	subscriptions *hashmap.Map[string, bool]
 	// Buffered channel of inbound messages.
 	recv chan []byte
 	// Buffered channel of outbound messages.
@@ -73,14 +82,14 @@ func (c *Client) readPump() {
 			break
 		}
 
-		// TODO: Reply with message rejecting any commands
+		// TODO: Reply with payload rejecting any commands
 		message = bytes.TrimSpace(bytes.Replace(message, newline, space, -1))
 		if c.recv != nil {
 			c.recv <- message
 		} else {
-			// TODO: should prob reply with error message
+			// TODO: should prob reply with error payload
 			// for now though, just discard and log a warning
-			log.Printf("Recieved unexpected message via websockets: %s", message)
+			log.Printf("Recieved unexpected payload via websockets: %s", message)
 		}
 	}
 }
@@ -114,7 +123,7 @@ func (c *Client) writePump() {
 			}
 			w.Write(message)
 
-			// Add queued chat messages to the current websocket message.
+			// Add queued chat messages to the current websocket payload.
 			n := len(c.send)
 			for i := 0; i < n; i++ {
 				w.Write(newline)
@@ -133,9 +142,13 @@ func (c *Client) writePump() {
 	}
 }
 
-func (c *Client) Send(data []byte) error {
-	c.send <- data
-	return nil
+func (c *Client) Send(data []byte, tag string) error {
+	select {
+	case c.send <- data:
+		return nil
+	default:
+		return errors.New(fmt.Sprintf("Failed to send %s to client", data))
+	}
 }
 
 func (c *Client) listen(cb MessageCallback) {
@@ -165,20 +178,54 @@ func (c *Client) close() {
 	close(c.send)
 }
 
+func (c *Client) Subscribe(names ...string) {
+	for _, name := range names {
+		c.subscriptions.Set(name, true)
+	}
+}
+
+func (c *Client) Unsubscribe(names ...string) {
+	for _, name := range names {
+		c.subscriptions.Del(name)
+	}
+}
+
+func (c *Client) IsSubscribed(names ...string) bool {
+	wildcard, _ := c.subscriptions.GetOrInsert("*", false)
+	if wildcard {
+		return true
+	}
+	for _, name := range names {
+		value, _ := c.subscriptions.GetOrInsert(name, false)
+		if value {
+			return true
+		}
+	}
+	return false
+}
+
 // Serve handles websocket requests from the peer.
-func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, cb MessageCallback) error {
+func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, opts HubServeOpts) (*Client, error) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println(err)
-		return err
+		return nil, err
 	}
 	client := &Client{
-		Hub:  h,
-		conn: conn,
-		send: make(chan []byte, maxMessageSize*4),
-		recv: nil,
+		Hub:           h,
+		conn:          conn,
+		send:          make(chan []byte, maxMessageSize*4),
+		recv:          nil,
+		subscriptions: hashmap.New[string, bool](),
 	}
-	if cb != nil {
+
+	var argSubs []string = []string{"errors", "broadcast"}
+	if opts.Subscriptions != nil {
+		argSubs = append(argSubs, opts.Subscriptions...)
+	}
+	client.Subscribe(argSubs...)
+
+	if opts.OnMessage != nil {
 		client.recv = make(chan []byte, maxMessageSize*4)
 	}
 	client.Hub.register <- client
@@ -187,8 +234,8 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, cb MessageCallback) 
 	// new goroutines.
 	go client.writePump()
 	go client.readPump()
-	if cb != nil {
-		go client.listen(cb)
+	if opts.OnMessage != nil {
+		go client.listen(opts.OnMessage)
 	}
-	return nil
+	return client, nil
 }
