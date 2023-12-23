@@ -87,5 +87,5 @@ func rpcParseJsonRequestBody[T interface{}](r *http.Request, target *T) error {
 }
 
 func (svc *RpcService) handleEvent(event string) {
-
+	svc.wsChannel.Broadcast([]byte(event))
 }

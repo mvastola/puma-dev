@@ -15,6 +15,7 @@ func (pd *HTTPServer) ToJson() JsonObj {
 	obj["domains"] = pd.Domains
 	obj["idleTime"] = pool.IdleTime
 	obj["rootDirectory"] = pool.Dir
+	obj["pid"] = rpcService.Pid
 	return obj
 
 }

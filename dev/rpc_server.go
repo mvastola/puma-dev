@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
+	WebSocketChat "github.com/puma/puma-dev/dev/websockets"
 	"github.com/puma/puma-dev/homedir"
 	"log"
 	"net"
@@ -12,6 +13,7 @@ import (
 )
 
 const RpcSocketPath = "~/.puma-dev.mgmt.sock"
+const RpcPublicDir = "~/src/puma-dev/public"
 const RpcTcpPort = 8080
 
 var StatusLabels = [...]string{"booting", "running", "dead"}
@@ -24,12 +26,16 @@ type RpcListenAddr struct {
 }
 
 type RpcService struct {
-	TcpPort    int16
-	SocketPath string
-	Pool       *AppPool
-	PumaDev    *HTTPServer
-	mux        *mux.Router
+	Pid          int
+	TcpPort      int16
+	SocketPath   string
+	PublicDir    string
+	PublicServer http.Handler
+	Pool         *AppPool
+	PumaDev      *HTTPServer
 
+	mux         *mux.Router
+	wsChannel   *WebSocketChat.Hub
 	listeners   []net.Listener
 	ctrlServer  *http.Server
 	initialized bool
@@ -38,12 +44,17 @@ type RpcService struct {
 func (svc *RpcService) init(h *HTTPServer) {
 	svc.initialized = false
 	svc.PumaDev = h
+	svc.Pid = os.Getpid()
 	svc.Pool = h.Pool
 	svc.mux = mux.NewRouter()
 	svc.ctrlServer = &http.Server{
 		Handler: svc,
 	}
+	svc.wsChannel = WebSocketChat.NewHub()
 	svc.SocketPath = homedir.MustExpand(RpcSocketPath)
+	svc.PublicDir = homedir.MustExpand(RpcPublicDir)
+	svc.PublicServer = http.FileServer(http.Dir(svc.PublicDir))
+	svc.TcpPort = RpcTcpPort
 	svc.initialized = true
 }
 
@@ -70,9 +81,8 @@ func (svc *RpcService) start() {
 	_ = os.Remove(svc.SocketPath)
 	svc.listen()
 
-	var listener *net.Listener = nil
-	for listener = range svc.listeners {
-		go svc.serveListener(listener)
+	for _, listener := range svc.listeners {
+		go svc.serveListener(&listener)
 	}
 }
 
@@ -84,6 +94,7 @@ func (svc *RpcService) wrapHandler(handler SimpleHandler) http.HandlerFunc {
 			w.WriteHeader(status)
 		}
 		if err != nil && NotFoundErr.Error() == err.Error() {
+			log.Printf("RPC path not found: %s", r.URL.String())
 			http.NotFound(w, r)
 			return
 		} else if err != nil {
@@ -112,6 +123,7 @@ func (h *HTTPServer) StartRPC() *RpcService {
 	rpcService.init(h)
 	rpcService.ConfigureRoutes()
 	go func() { rpcService.start() }()
+	go func() { rpcService.wsChannel.Run() }()
 	return &rpcService
 }
 

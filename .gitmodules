@@ -1,0 +1,3 @@
+[submodule "contrib/gorilla-websocket"]
+	path = contrib/gorilla-websocket
+	url = https://github.com/gorilla/websocket

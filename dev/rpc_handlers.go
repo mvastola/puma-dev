@@ -2,7 +2,7 @@ package dev
 
 import (
 	_ "fmt"
-	"github.com/gorilla/websocket"
+	WebSocketChat "github.com/puma/puma-dev/dev/websockets"
 	"github.com/vektra/errors"
 	"log"
 	"net/http"
@@ -18,8 +18,6 @@ type SimpleHandler func(*http.Request) (int, any, error)
 var NotImplementedErr = errors.New("Not Yet Implemented")
 var NotFoundErr = errors.New("Path does not exist")
 var removeSuffixRe = regexp.MustCompile(`-[a-f0-9]{4,}$`)
-
-var upgrader = websocket.Upgrader{} // use default options
 
 func (svc *RpcService) ConfigureRoutes() {
 	// see: https://github.com/gorilla/pat?tab=readme-ov-file#example
@@ -41,6 +39,8 @@ func (svc *RpcService) ConfigureRoutes() {
 	mux.HandleFunc("/apps/{id}", svc.wrapHandler(svc.rpcKillApp)).Methods("DELETE")
 
 	mux.HandleFunc("/events", svc.rpcEventsConnectWS)
+	mux.PathPrefix("/").Handler(svc.PublicServer)
+
 }
 
 func (svc *RpcService) rpcGetServer(r *http.Request) (int, any, error) {
@@ -121,40 +121,34 @@ func (svc *RpcService) rpcKillApp(r *http.Request) (int, any, error) {
 	return http.StatusNotImplemented, nil, NotImplementedErr
 }
 
-// This just echos for now, but want to turn it into an event feed
 func (svc *RpcService) rpcEventsConnectWS(w http.ResponseWriter, r *http.Request) {
-	c, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Print("upgrade:", err)
-		return
+	cb := func(c *WebSocketChat.Client, msg []byte) error {
+		log.Printf("recv: %s", msg)
+		return c.Send([]byte("Incoming websocket messages unsupported"))
 	}
-	defer c.Close()
-	for {
-		// TODO: need to setup some sort of blocking queue, I guess
-		mt, message, err := c.ReadMessage()
-		if err != nil {
-			log.Println("read:", err)
-			break
-		}
-		log.Printf("recv: %s", message)
-		err = c.WriteMessage(mt, message)
-		if err != nil {
-			log.Println("write:", err)
-			break
-		}
+	err := svc.wsChannel.Serve(w, r, cb)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
 	}
 }
 
-//func (svc *RpcService) rpcDeleteServer(r *http.Request) (int, any, error) {
-//	params := svc.reqQueryParams(r)
-//	action := params.Get("action")
-//	switch action {
-//	case "purge":
-//
-//		return svc.purgePool()
-//	case "exit":
-//		return svc.stopPumaDev()
-//	default:
-//		return http.StatusNotImplemented, nil, NotImplementedErr
-//	}
-//}
+func (svc *RpcService) rpcDeleteServer(r *http.Request) (int, any, error) {
+	params := svc.reqQueryParams(r)
+	action := params.Get("action")
+	switch action {
+	case "purge":
+		svc.Pool.Purge()
+		svc.wsChannel.UnregisterAll()
+		return http.StatusOK, nil, nil
+	case "exit":
+		svc.wsChannel.Stop()
+		err := Stop()
+		if err != nil {
+			log.Fatalf("Error in RPC exit command: %v", err)
+		}
+		// TODO: find out how to defer this until after the client gets their response
+		return http.StatusOK, nil, nil
+	default:
+		return http.StatusNotImplemented, nil, NotImplementedErr
+	}
+}
