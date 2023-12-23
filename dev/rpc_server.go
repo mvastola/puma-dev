@@ -91,6 +91,9 @@ func (svc *RpcService) wrapHandler(handler SimpleHandler) http.HandlerFunc {
 	wrapper := func(w http.ResponseWriter, r *http.Request) {
 
 		status, response, err := handler(r)
+		if err != nil && status <= 0 {
+			status = http.StatusInternalServerError
+		}
 		if status > 0 {
 			w.WriteHeader(status)
 		}
@@ -99,7 +102,6 @@ func (svc *RpcService) wrapHandler(handler SimpleHandler) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		} else if err != nil {
-			w.WriteHeader(500)
 			_, _ = w.Write([]byte(err.Error()))
 			return
 		}

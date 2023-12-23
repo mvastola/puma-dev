@@ -5,6 +5,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/hairyhenderson/go-which"
 	shellquote "github.com/kballard/go-shellquote"
+	"github.com/puma/puma-dev/dev/rpc"
 	"github.com/vektra/errors"
 	"golang.org/x/term"
 	"gopkg.in/tomb.v2"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,34 +26,34 @@ var DefaultShell = "/bin/bash"
 // TODO: store a map of persisted apps
 
 type RpcConsoleProgResult struct {
-	State os.ProcessState
+	State *os.ProcessState
 }
 
 type RpcConsoleProgOpts struct {
-	Key         *string
-	Dir         *string
+	Key         rpc.Maybe[string]
+	Dir         rpc.Maybe[string]
 	Env         map[string]string
 	Argv        []string
-	UseShell    *bool
-	Shell       *string
+	UseShell    rpc.Maybe[bool]
+	Shell       rpc.Maybe[string]
 	ShellArgs   []string
-	Persist     *bool
-	Interactive *bool
-	AllocPty    *bool
+	Persist     rpc.Maybe[bool]
+	Interactive rpc.Maybe[bool]
+	AllocPty    rpc.Maybe[bool]
 	Attributes  syscall.SysProcAttr
-	IdleTimeout time.Duration
+	IdleTimeout rpc.Maybe[time.Duration]
 }
 
 type RpcConsoleProg struct {
-	Key         *string
+	Key         rpc.Maybe[string]
 	Label       string
 	App         *App
 	Command     *exec.Cmd
 	Cmdline     string
 	Process     *os.Process
-	Result      *RpcConsoleProgResult // TODO: implement this
+	Result      RpcConsoleProgResult // TODO: implement this
 	AllocPty    bool
-	IdleTimeout *time.Duration
+	IdleTimeout rpc.Maybe[time.Duration]
 
 	tmpDir          string
 	tty             string
@@ -68,14 +70,14 @@ type RpcConsoleProg struct {
 	stdin   io.Writer
 	stdout  io.Reader
 	stderr  io.Reader
-	lastUse time.Time
+	lastUse rpc.Maybe[time.Time]
 	lock    sync.Mutex
 
 	readyChan chan struct{}
 }
 
 func (prog *RpcConsoleProg) ComputeShellArgs(opts *RpcConsoleProgOpts) []string {
-	if opts.UseShell != nil && !*opts.UseShell {
+	if !opts.UseShell.HasValue() {
 		return make([]string, 0)
 	}
 	var ok bool
@@ -94,7 +96,7 @@ func (prog *RpcConsoleProg) ComputeShellArgs(opts *RpcConsoleProgOpts) []string 
 	if opts.ShellArgs != nil {
 		args = append(args, opts.ShellArgs...)
 	}
-	if opts.Interactive == nil || *opts.Interactive {
+	if opts.Interactive.ValueOr(false) {
 		args = append(args, "-l", "-i")
 	}
 
@@ -108,44 +110,46 @@ func (prog *RpcConsoleProg) eventAdd(name string, extraArgs ...interface{}) {
 	if prog.Process != nil {
 		args = append(args, "pid", prog.Process.Pid)
 	}
-	if prog.Key != nil {
-		args = append(args, "programKey", *prog.Key)
-	}
+	prog.Key.WithValue(func(key string) any {
+		args = append(args, "programKey", prog.Key)
+		return nil
+	}, nil)
+
+	args = append(args, extraArgs...)
 	a.eventAdd(name, args...)
 }
 
-func (a *App) InitConsoleApp(opts RpcConsoleProgOpts) (*RpcConsoleProg, error) {
-	prog := &RpcConsoleProg{
-		App:  a,
-		Key:  opts.Key, // TODO: lookup key first
-		lock: sync.Mutex{},
+func NewRpcConsoleProgOpts() *RpcConsoleProgOpts {
+	return &RpcConsoleProgOpts{
+		Key:         rpc.NewMaybe[string](),
+		Dir:         rpc.NewMaybe[string](),
+		UseShell:    rpc.NewMaybe[bool](),
+		Shell:       rpc.NewMaybe[string](),
+		Persist:     rpc.NewMaybe[bool](),
+		Interactive: rpc.NewMaybe[bool](),
+		AllocPty:    rpc.NewMaybe[bool](),
+		IdleTimeout: rpc.NewMaybe[time.Duration](),
+		Attributes:  syscall.SysProcAttr{},
 	}
-	err := prog.Init(&opts)
+}
+func (a *App) InitConsoleApp(opts *RpcConsoleProgOpts) (*RpcConsoleProg, error) {
+	prog := &RpcConsoleProg{
+		App:             a,
+		Key:             opts.Key, // TODO: lookup key first
+		lock:            sync.Mutex{},
+		cleanupRoutines: make([]func(), 0),
+		Result:          RpcConsoleProgResult{State: nil},
+		IdleTimeout:     opts.IdleTimeout,
+		lastUse:         rpc.NewMaybe[time.Time](),
+	}
+	err := prog.Init(opts)
 	if err != nil {
 		return nil, err
 	}
 	return prog, nil
 }
 
-func (prog *RpcConsoleProg) Init(opts *RpcConsoleProgOpts) error {
-	var a *App = prog.App
-
-	if opts.Dir == nil {
-		opts.Dir = &a.dir
-	}
-	if opts.Persist == nil {
-		*opts.Persist = opts.Key != nil
-	} else if *opts.Persist && opts.Key == nil {
-		return errors.New("key not given for persistent RpcConsoleProg")
-	}
-
-	if opts.UseShell == nil {
-		*opts.UseShell = true
-	}
-	if opts.AllocPty == nil {
-		*opts.AllocPty = true
-	}
-
+func (prog *RpcConsoleProg) fullCmdArgs(opts *RpcConsoleProgOpts) ([]string, error) {
 	var fullArgs = make([]string, 0)
 	shellArgs := prog.ComputeShellArgs(opts)
 	if shellArgs != nil {
@@ -155,28 +159,60 @@ func (prog *RpcConsoleProg) Init(opts *RpcConsoleProgOpts) error {
 		fullArgs = append(fullArgs, "-c")
 		fullArgs = append(fullArgs, opts.Argv...)
 	} else if len(fullArgs) <= 0 {
-		return errors.New("No args given to launch non-shell program")
+		return nil, errors.New("No args given to launch non-shell program")
 	}
 
+	prog.Key.ApplyDefault(path.Base(fullArgs[0]))
+	labelParts := []string{prog.App.Name}
+	prog.Key.WithValue(func(key string) any {
+		labelParts = append(labelParts, key)
+		return nil
+	})
+	prog.Label = strings.Join(labelParts, "-")
+
 	if !path.IsAbs(fullArgs[0]) {
-		fullArgs[0] = which.Which(fullArgs[0])
+		whichResult := which.Which(fullArgs[0])
+		if len(whichResult) == 0 {
+			errmsg := fmt.Sprintf("Could not find executable in PATH for command %s", fullArgs[0])
+			return nil, errors.New(errmsg)
+		}
+		fullArgs[0] = whichResult
 	}
 	prog.Cmdline = shellquote.Join(fullArgs...)
+	return fullArgs, nil
+}
+
+func (prog *RpcConsoleProg) Init(opts *RpcConsoleProgOpts) error {
+	var a *App = prog.App
+
+	opts.Dir.ApplyDefault(a.dir)
+	opts.Persist.ApplyDefault(opts.Key.HasValue())
+	if !opts.Persist.HasValue() {
+		return errors.New("key not given for persistent RpcConsoleProg")
+	}
+
+	opts.UseShell.ApplyDefault(true)
+	opts.AllocPty.ApplyDefault(true)
+
+	var (
+		fullArgs []string
+		err      error
+	)
+	fullArgs, err = prog.fullCmdArgs(opts)
+
+	if err != nil {
+		errCtx := fmt.Sprintf("Generating arguments for command in console prog %s", prog.Label)
+		return errors.Context(err, errCtx)
+	}
 	prog.Command = exec.Command(fullArgs[0], fullArgs[1:]...)
+
 	cmd := prog.Command
-	cmd.Dir = *opts.Dir
+	cmd.Dir = opts.Dir.ValueOr(a.dir)
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &opts.Attributes
 
-	var err error
-	progName := ""
-	if prog.Key != nil && len(*prog.Key) > 0 {
-		progName = *prog.Key
-	} else {
-		progName = path.Base(cmd.Path)
-	}
-	prog.Label = fmt.Sprintf("%s-%s", a.Host, progName)
-	prog.tmpDir, err = os.MkdirTemp("", fmt.Sprintf("%s.tmp-*", prog.Label))
+	tmpDirTemplate := fmt.Sprintf("%s.tmp-*", prog.Label)
+	prog.tmpDir, err = os.MkdirTemp("", tmpDirTemplate)
 	if err != nil {
 		return err
 	}
@@ -280,7 +316,7 @@ func (prog *RpcConsoleProg) Start() error {
 	prog.eventAdd("booting_app", "cmdline", prog.Cmdline)
 
 	prog.t.Go(prog.watch)
-	if prog.IdleTimeout != nil {
+	if prog.IdleTimeout.HasValue() {
 		prog.t.Go(prog.idleMonitor)
 	}
 	prog.t.Go(prog.run)
@@ -367,8 +403,15 @@ func (prog *RpcConsoleProg) watch() error {
 	return err
 }
 
+func (prog *RpcConsoleProg) IsTimedOut() bool {
+	return prog.lastUse.WithValue(func(lastUse time.Time) any {
+		diff := time.Since(lastUse)
+		return prog.IdleTimeout.HasValue() && diff > *prog.IdleTimeout.Ptr()
+	}, false).(bool)
+
+}
 func (prog *RpcConsoleProg) idleMonitor() error {
-	if prog.IdleTimeout == nil {
+	if !prog.IdleTimeout.HasValue() {
 		return nil
 	}
 	ticker := time.NewTicker(10 * time.Second)
@@ -377,10 +420,9 @@ func (prog *RpcConsoleProg) idleMonitor() error {
 	for {
 		select {
 		case <-ticker.C:
-			diff := time.Since(prog.lastUse)
-			if diff > *prog.IdleTimeout {
-				prog.Kill("Console program is idle")
-				return nil
+			if prog.IsTimedOut() {
+				err := prog.Kill("Console program is idle")
+				return errors.Context(err, "Killing ConsoleProg after timeout")
 			}
 		case <-prog.t.Dying():
 			return nil
@@ -416,7 +458,7 @@ func (prog *RpcConsoleProg) WaitTilReady() error {
 		case <-prog.t.Dying():
 			return prog.t.Err()
 		default:
-			prog.lastUse = time.Now()
+			prog.lastUse.Set(time.Now())
 			return nil
 		}
 	case <-prog.t.Dying():

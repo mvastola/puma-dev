@@ -37,6 +37,7 @@ func (svc *RpcService) ConfigureRoutes() {
 	mux.HandleFunc("/apps/{id}", svc.wrapHandler(svc.rpcUpdateApp)).Methods("PATCH")
 	mux.HandleFunc("/apps/{id}", svc.wrapHandler(svc.rpcKillApp)).Methods("DELETE")
 	mux.HandleFunc("/apps/{id}/console", svc.wrapHandler(svc.rpcStartAppConsole)).Methods("POST")
+	mux.HandleFunc("/apps/{id}/console", svc.wrapHandler(svc.rpcStopAppConsole)).Methods("DELETE")
 
 	mux.HandleFunc("/events", svc.rpcEventsConnectWS)
 	mux.PathPrefix("/").Handler(svc.PublicServer)
@@ -124,11 +125,11 @@ func (svc *RpcService) rpcStartAppConsole(r *http.Request) (int, any, error) {
 		return http.StatusNotFound, nil, NotFoundErr
 	}
 	var err error
-	opts := RpcConsoleProgOpts{}
-	*opts.Key = "rails console"
+	opts := NewRpcConsoleProgOpts()
+	opts.Key.Set("rails console")
 	opts.Argv = []string{"bundle", "exec", "rails", "console"}
-	*opts.Interactive = true
-	*opts.AllocPty = true
+	opts.Interactive.Set(true)
+	opts.AllocPty.Set(true)
 
 	spAppConsole, err = app.InitConsoleApp(opts)
 	if err != nil {
@@ -139,6 +140,21 @@ func (svc *RpcService) rpcStartAppConsole(r *http.Request) (int, any, error) {
 		return http.StatusInternalServerError, nil, err
 	}
 	return http.StatusCreated, nil, nil
+}
+
+func (svc *RpcService) rpcStopAppConsole(r *http.Request) (int, any, error) {
+	if spAppConsole == nil {
+		return http.StatusBadRequest, nil, errors.New("Console not started for app")
+	}
+	app := svc.findAppByRequest(r)
+	if app == nil || spAppConsole.App != app {
+		return http.StatusNotFound, nil, NotFoundErr
+	}
+	err := spAppConsole.Kill("RPC request")
+	if err != nil {
+		return http.StatusInternalServerError, nil, err
+	}
+	return http.StatusAccepted, spAppConsole.Result.State, nil
 }
 
 func (svc *RpcService) rpcKillApp(r *http.Request) (int, any, error) {

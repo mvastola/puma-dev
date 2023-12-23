@@ -19,7 +19,7 @@ func (svc *RpcService) reqQueryParams(r *http.Request) url.Values {
 func (svc *RpcService) findAppByRequest(r *http.Request) *App {
 	pathParams := mux.Vars(r)
 	params := svc.reqQueryParams(r)
-	id := svc.PumaDev.removeTLD(pathParams[":id"])
+	id := svc.PumaDev.removeTLD(pathParams["id"])
 	tryCreateIfMissing := !truthy.ValueAny(params.Get("noCreate"))
 	return svc.findAppByKey(id, tryCreateIfMissing)
 }
