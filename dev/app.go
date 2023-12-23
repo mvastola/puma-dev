@@ -116,6 +116,7 @@ func (a *App) watch() error {
 		for {
 			line, err := r.ReadString('\n')
 			if line != "" {
+				rpcService.handleLog(a, line)
 				a.lines.Append(line)
 				a.lastLogLine = line
 				fmt.Fprintf(os.Stdout, "%s[%d]: %s", a.Name, a.Command.Process.Pid, line)
